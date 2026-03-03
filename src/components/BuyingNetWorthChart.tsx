@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AreaChart,
   Area,
@@ -113,20 +113,34 @@ const TAB_OPTIONS: { value: ChartMode; label: string }[] = [
   { value: 'cashflow', label: 'Cash flow' },
 ];
 
+function useWindowWidth() {
+  const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
 export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChartProps) {
   const [mode, setMode] = useState<ChartMode>('total');
+  const windowWidth = useWindowWidth();
 
   const retirementLabel = retirementYear != null
     ? rows.find(r => r.year === retirementYear)
     : null;
+  const compactLabels = windowWidth < 640;
   const retirementXValue = retirementLabel
-    ? `${retirementLabel.year} (${retirementLabel.age})`
+    ? (compactLabels ? `${retirementLabel.age}` : `${retirementLabel.year} (${retirementLabel.age})`)
     : undefined;
 
-  const xInterval = Math.max(0, Math.floor(rows.length / 10) - 1);
+  const maxLabels = windowWidth < 480 ? 4 : windowWidth < 768 ? 6 : 10;
+  const xInterval = Math.max(0, Math.floor(rows.length / maxLabels) - 1);
+  const xTickSize = windowWidth < 480 ? 9 : 11;
 
   const netWorthData = rows.map((r) => ({
-    yearLabel: `${r.year} (${r.age})`,
+    yearLabel: compactLabels ? `${r.age}` : `${r.year} (${r.age})`,
     netWorth: Math.round(r.netWorth),
     houseEquity: Math.round(r.houseEquity),
     tfsa: Math.round(r.tfsaBalance),
@@ -146,7 +160,7 @@ export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChar
     const totalSavings = r.tfsaContributions + r.rrspContributions + r.nonRegisteredContributions;
     const withdrawals = r.tfsaWithdrawals + r.rrspWithdrawals + r.nonRegisteredWithdrawals + r.helocWithdrawals;
     return {
-      yearLabel: `${r.year} (${r.age})`,
+      yearLabel: compactLabels ? `${r.age}` : `${r.year} (${r.age})`,
       salary: Math.round(isRetired ? 0 : r.grossIncome),
       partTime: Math.round(isRetired ? r.grossIncome : 0),
       dividends: Math.round(r.yearlyDividendIncome),
@@ -186,7 +200,7 @@ export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChar
               <XAxis
                 dataKey="yearLabel"
                 stroke="#94a3b8"
-                tick={{ fontSize: 11 }}
+                tick={{ fontSize: xTickSize }}
                 axisLine={{ stroke: '#475569' }}
                 interval={xInterval}
               />
@@ -256,7 +270,7 @@ export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChar
               <XAxis
                 dataKey="yearLabel"
                 stroke="#94a3b8"
-                tick={{ fontSize: 11 }}
+                tick={{ fontSize: xTickSize }}
                 axisLine={{ stroke: '#475569' }}
                 interval={xInterval}
               />
