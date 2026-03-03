@@ -100,6 +100,9 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
   const projectionYears = Math.max(1, inputs.lifeExpectancy - inputs.currentAge);
   const yearsUntilRetirement = Math.max(0, inputs.retirementAge - inputs.currentAge);
   const yearsUntilPurchase = Math.max(0, inputs.yearsUntilPurchase ?? 0);
+  const buyingHouse = inputs.buyingHouse !== false;
+  /** When rent-only, run the rent loop for the full projection; otherwise only until purchase. */
+  const rentYears = buyingHouse ? yearsUntilPurchase : projectionYears;
 
   const startYear = new Date().getFullYear();
   const downPayment = (inputs.buyAmount * inputs.percentageDownpayment) / 100;
@@ -147,17 +150,17 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
   let helocDividendBalance = 0;
   let helocGrowthBalance = 0;
 
-  const growthFirstRampYears = inputs.helocGrowthFirst ? 3 : 0;
+  const growthFirstRampYears = inputs.helocGrowthFirst ? 5 : 0;
   const growthFirstCutoffYear = inputs.helocGrowthFirst
     ? Math.max(0, yearsUntilRetirement - growthFirstRampYears)
     : 0;
 
   const rows: BuyingYearRow[] = [];
 
-  // --- Pre-purchase (renting) years ---
-  if (yearsUntilPurchase > 0) {
+  // --- Renting years (pre-purchase, or rent-only for full projection) ---
+  if (rentYears > 0) {
     const monthlyRent = inputs.monthlyRent ?? 2000;
-    for (let y = 0; y < yearsUntilPurchase; y++) {
+    for (let y = 0; y < rentYears; y++) {
       const year = startYear + y;
       const age = inputs.currentAge + y;
       const isRetired = y >= yearsUntilRetirement;
@@ -175,6 +178,7 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
       let incomeTax: number;
       let netIncome: number;
       let available: number;
+      let totalRetirementDraw = 0;
       let tfsaContrib = 0;
       let rrspContrib = 0;
       let nonRegContrib = 0;
@@ -210,19 +214,87 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
         netIncome = currentGrossIncome - incomeTax;
         const retireNeed = retirementMonthlyNeed * MONTHS_PER_YEAR + yearlyRent;
         const incomeAfterTax = Math.max(0, netIncome);
-        const surplus = incomeAfterTax - retireNeed;
-        if (surplus > 0) {
-          tfsaContrib = Math.min(surplus, Math.max(0, tfsaRoomAvailable));
+        totalRetirementDraw = Math.max(0, retireNeed - incomeAfterTax);
+        const retireSurplus = Math.max(0, incomeAfterTax - retireNeed);
+        if (retireSurplus > 0) {
+          tfsaContrib = Math.min(retireSurplus, Math.max(0, tfsaRoomAvailable));
           tfsaRoomUsed += tfsaContrib;
-          nonRegContrib = surplus - tfsaContrib;
+          nonRegContrib = retireSurplus - tfsaContrib;
         }
         available = 0;
       }
+
+      // Grow balances, then add contributions
       tfsaBalance = tfsaBalance * invGrowth + tfsaContrib;
       rrspBalance = rrspBalance * invGrowth + rrspContrib;
       nonRegisteredBalance = nonRegisteredBalance * invGrowth + nonRegContrib;
       nonRegisteredCostBasis += nonRegContrib;
-      const totalIncome = currentGrossIncome;
+
+      // Retirement withdrawals (two-pass: base draw then cover withdrawal tax)
+      let tfsaWithdrawals = 0;
+      let rrspWithdrawals = 0;
+      let nonRegWithdrawals = 0;
+      let amountNotCovered = 0;
+
+      if (isRetired && totalRetirementDraw > 0) {
+        const order = inputs.retirementWithdrawalOrder?.length === 4
+          ? inputs.retirementWithdrawalOrder
+          : (['RRSP', 'NonRegistered', 'HELOC', 'TFSA'] as const);
+        let withdrawalTax = 0;
+
+        for (let pass = 0; pass < 2; pass++) {
+          const target = pass === 0 ? totalRetirementDraw : withdrawalTax;
+          let needed = target;
+          if (needed <= 0) continue;
+
+          for (const account of order) {
+            if (needed <= 0) break;
+            if (account === 'TFSA') {
+              const take = Math.min(needed, tfsaBalance);
+              tfsaWithdrawals += take;
+              tfsaBalance -= take;
+              needed -= take;
+            } else if (account === 'RRSP') {
+              const take = Math.min(needed, rrspBalance);
+              rrspWithdrawals += take;
+              rrspBalance -= take;
+              needed -= take;
+            } else if (account === 'NonRegistered') {
+              const take = Math.min(needed, nonRegisteredBalance);
+              nonRegWithdrawals += take;
+              if (nonRegisteredBalance > 0) {
+                nonRegisteredCostBasis *= (nonRegisteredBalance - take) / nonRegisteredBalance;
+              }
+              nonRegisteredBalance -= take;
+              needed -= take;
+            }
+            // HELOC account skipped in rent-only (no HELOC without a house)
+          }
+
+          if (pass === 1) {
+            amountNotCovered = Math.max(0, needed);
+          }
+
+          if (pass === 0) {
+            amountNotCovered = Math.max(0, needed);
+            const nonRegGainRatio = nonRegWithdrawals > 0 && (nonRegisteredBalance + nonRegWithdrawals) > 0
+              ? Math.max(0, 1 - (nonRegisteredCostBasis / (nonRegisteredBalance + nonRegWithdrawals)))
+              : 0;
+            const taxableCapGains = nonRegWithdrawals * nonRegGainRatio * 0.5;
+            const totalTaxableFromWithdrawals = rrspWithdrawals + taxableCapGains;
+            const taxableWithWithdrawals = currentGrossIncome + netInvIncome + totalTaxableFromWithdrawals;
+            const taxOnAll = calculateIncomeTax(Math.max(0, taxableWithWithdrawals), inputs.numberOfIncomeEarners).totalTax;
+            withdrawalTax = Math.max(0, taxOnAll - incomeTax);
+            incomeTax = taxOnAll;
+            netIncome = currentGrossIncome - incomeTax;
+          }
+        }
+      }
+
+      pendingTfsaRegain = tfsaWithdrawals;
+
+      const totalWithdrawals = tfsaWithdrawals + rrspWithdrawals + nonRegWithdrawals;
+      const totalIncome = currentGrossIncome + totalWithdrawals;
       const effectiveTaxRate = totalIncome > 0 ? (incomeTax / totalIncome) * 100 : 0;
       const netWorth = tfsaBalance + rrspBalance + nonRegisteredBalance;
       rows.push({
@@ -248,15 +320,15 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
         yearlyDividendIncome: 0,
         grossIncome: currentGrossIncome,
         excessDividendIncome: 0,
-        totalWithdrawals: 0,
+        totalWithdrawals,
         incomeTax,
         effectiveTaxRate,
         netIncome,
         nonHousingExpenses: yearlyExpenses,
         monthlyHousingCosts: yearlyRent / MONTHS_PER_YEAR,
         yearlyHousingCosts: yearlyRent,
-        remainingForInvestment: available,
-        amountNotCoveredByInvestments: 0,
+        remainingForInvestment: isRetired ? -totalRetirementDraw : available,
+        amountNotCoveredByInvestments: amountNotCovered,
         tfsaContributions: tfsaContrib,
         tfsaContributionRoom: tfsaRoomAvailable,
         rrspContributions: rrspContrib,
@@ -265,11 +337,11 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
         helocInvestmentContributions: 0,
         helocDividendContributions: 0,
         helocGrowthContributions: 0,
-        tfsaWithdrawals: 0,
+        tfsaWithdrawals,
         tfsaBalance,
-        rrspWithdrawals: 0,
+        rrspWithdrawals,
         rrspBalance,
-        nonRegisteredWithdrawals: 0,
+        nonRegisteredWithdrawals: nonRegWithdrawals,
         nonRegisteredBalance,
         helocWithdrawals: 0,
         helocInvestmentsBalance: 0,
@@ -281,24 +353,33 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
       grossIncome *= incomeGrowth;
       yearlyExpenses *= expenseInflation;
     }
-    const { amountFromRRSP, amountFromTFSA } = getDownPaymentAllocationFromBalances(
-      downPayment,
-      inputs.currentFHSABalance,
-      rrspBalance,
-      tfsaBalance,
-    );
-    tfsaBalance -= amountFromTFSA;
-    rrspBalance -= amountFromRRSP;
-    pendingTfsaRegain = amountFromTFSA;
-    loanBalance = inputs.buyAmount - downPayment;
-    totalMonths = inputs.mortgageAmortizationYears * MONTHS_PER_YEAR;
-    monthsRemaining = totalMonths;
-    mortgageRate = inputs.mortgageRateInitial;
-    payment = calcMonthlyPayment(loanBalance, mortgageRate, totalMonths);
-    propertyValue = inputs.buyAmount;
-    yearlyTaxes = inputs.startingYearlyTaxes;
-    yearlyStrata = inputs.startingMonthlyStrata * MONTHS_PER_YEAR;
-  } else {
+    // Purchase event only when buying and we had a pre-purchase phase
+    if (buyingHouse && yearsUntilPurchase > 0) {
+      const { amountFromRRSP, amountFromTFSA } = getDownPaymentAllocationFromBalances(
+        downPayment,
+        inputs.currentFHSABalance,
+        rrspBalance,
+        tfsaBalance,
+      );
+      tfsaBalance -= amountFromTFSA;
+      rrspBalance -= amountFromRRSP;
+      pendingTfsaRegain = amountFromTFSA;
+      loanBalance = inputs.buyAmount - downPayment;
+      totalMonths = inputs.mortgageAmortizationYears * MONTHS_PER_YEAR;
+      monthsRemaining = totalMonths;
+      mortgageRate = inputs.mortgageRateInitial;
+      payment = calcMonthlyPayment(loanBalance, mortgageRate, totalMonths);
+      propertyValue = inputs.buyAmount;
+      yearlyTaxes = inputs.startingYearlyTaxes;
+      yearlyStrata = inputs.startingMonthlyStrata * MONTHS_PER_YEAR;
+    }
+  }
+
+  // Rent-only: no purchase or owning phase
+  if (!buyingHouse) return rows;
+
+  // Buy now (no prior rent years): apply down payment from initial balances
+  if (rentYears === 0) {
     const { amountFromRRSP, amountFromTFSA } = getDownPaymentAllocation(inputs);
     tfsaBalance -= amountFromTFSA;
     rrspBalance -= amountFromRRSP;
@@ -377,12 +458,15 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
         helocDividendContrib = 0;
         helocGrowthContrib = helocRoom;
       } else {
-        // Dividend-first: fill dividend bucket to cover interest (+ TFSA if not growth-first)
+        // Dividend-first: fill dividend bucket to cover interest + housing + expenses + TFSA
         const divBalAfterGrowth = helocDividendBalance * dividendGrowth;
         const totalHelocAfter = helocBalance + helocRoom;
         const interestNeeded = helocRate * totalHelocAfter;
-        const tfsaTarget = inputs.helocGrowthFirst ? 0 : Math.max(0, tfsaRoomAvailable);
-        const totalTarget = interestNeeded + tfsaTarget;
+        const retirementExpenses = retirementMonthlyNeed * MONTHS_PER_YEAR;
+        const yearsToRetirement = Math.max(1, yearsUntilRetirement - y);
+        const estRetirementHousing = yearlyHousing * Math.pow(inflationStrata, yearsToRetirement);
+        const tfsaTarget = Math.max(0, tfsaRoomAvailable);
+        const totalTarget = interestNeeded + estRetirementHousing + retirementExpenses + tfsaTarget;
         const dividendCoverage = dividendYield * divBalAfterGrowth;
         const shortfall = totalTarget - dividendCoverage;
         const minDividendNeeded = dividendYield > 0 ? Math.max(0, shortfall / dividendYield) : helocRoom;
@@ -391,17 +475,27 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
       }
     }
 
-    // Growth-first ramp: sell growth stocks → buy dividend stocks
+    // Growth-first ramp: sell growth stocks → buy dividend stocks.
     // HELOC money must stay invested, so conversion keeps the loan intact.
+    // Target: dividends cover interest + housing + non-housing expenses + TFSA room.
     if (inputs.helocGrowthFirst && !isRetired && y >= growthFirstCutoffYear && helocGrowthBalance > 0 && dividendYield > 0) {
       const totalHelocAfter = helocBalance + helocRoom;
       const interestNeeded = helocRate * totalHelocAfter;
+      const yearsToRetirement = Math.max(1, yearsUntilRetirement - y);
+      const retirementHousing = yearlyHousing * Math.pow(inflationStrata, yearsToRetirement);
+      const retirementExpenses = retirementMonthlyNeed * MONTHS_PER_YEAR;
+      const tfsaTarget = Math.max(0, tfsaRoomAvailable);
+      const totalCoverageTarget = interestNeeded + retirementHousing + retirementExpenses + tfsaTarget;
+
       const currentDivBal = helocDividendBalance * dividendGrowth + helocDividendContrib;
-      const dividendCoverage = dividendYield * currentDivBal;
-      const shortfall = interestNeeded - dividendCoverage;
+      const projectedDivBal = currentDivBal * Math.pow(dividendGrowth, yearsToRetirement);
+      const projectedCoverage = dividendYield * projectedDivBal;
+      const shortfall = totalCoverageTarget - projectedCoverage;
       if (shortfall > 0) {
         const neededDivBal = shortfall / dividendYield;
-        growthToDividendConversion = Math.min(helocGrowthBalance, neededDivBal);
+        const rampYearsLeft = Math.max(1, yearsToRetirement);
+        const yearlyConversion = Math.max(neededDivBal, helocGrowthBalance / rampYearsLeft);
+        growthToDividendConversion = Math.min(helocGrowthBalance, yearlyConversion);
       }
     }
 
@@ -478,17 +572,20 @@ export function runBuyingProjection(inputs: BuyingScenarioInputs): BuyingYearRow
       incomeTax = calculateIncomeTax(retireTaxableIncome, inputs.numberOfIncomeEarners).totalTax;
       netIncome = currentGrossIncome - incomeTax;
 
-      // Excess dividends reduce how much we need to withdraw from accounts
+      // Priority: dividends cover interest → housing → expenses → TFSA
       const expenseNeed = retirementNonHousingExpenses + yearlyHousing + helocInterestFromCash;
       const incomeAfterTax = Math.max(0, netIncome) + excessDividends;
       totalRetirementDraw = Math.max(0, expenseNeed - incomeAfterTax);
 
-      // Any leftover excess after covering expenses + tax → TFSA then non-registered
+      // Only contribute to TFSA from surplus if no withdrawals needed.
+      // Withdrawing from taxable accounts just to fund TFSA is inefficient.
       const retireSurplus = Math.max(0, incomeAfterTax - expenseNeed);
-      if (retireSurplus > 0) {
+      if (retireSurplus > 0 && totalRetirementDraw <= 0) {
         tfsaContrib = Math.min(retireSurplus, Math.max(0, tfsaRoomAvailable));
         tfsaRoomUsed += tfsaContrib;
         nonRegContrib = retireSurplus - tfsaContrib;
+      } else if (retireSurplus > 0) {
+        nonRegContrib = retireSurplus;
       }
       available = 0;
     }

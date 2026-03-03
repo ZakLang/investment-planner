@@ -12,7 +12,9 @@ export interface BuyingScenarioInputs {
   retirementAge: number;
 
   // Purchase & property
-  /** Years from now until purchase (0 = buying now). */
+  /** When false, run a rent-only simulation (no purchase). */
+  buyingHouse: boolean;
+  /** Years from now until purchase (0 = buying now). Only used when buyingHouse is true. */
   yearsUntilPurchase: number;
   /** Monthly rent until purchase (only when yearsUntilPurchase > 0). */
   monthlyRent: number;
@@ -83,6 +85,7 @@ export const DEFAULT_BUYING_INPUTS: BuyingScenarioInputs = {
   currentAge: 35,
   lifeExpectancy: 90,
   retirementAge: 60,
+  buyingHouse: true,
   yearsUntilPurchase: 0,
   monthlyRent: 2_000,
   rentIncreasePercent: 4,
