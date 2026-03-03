@@ -27,7 +27,7 @@ function formatCurrency(value: number): string {
 
 type ChartMode = 'total' | 'stacked' | 'cashflow';
 
-const assetColors = {
+const assetColors: Record<string, string> = {
   houseEquity: '#0ea5e9',
   tfsa: '#10b981',
   rrsp: '#a855f7',
@@ -36,6 +36,64 @@ const assetColors = {
   helocGrowth: '#f59e0b',
   helocDebt: '#ef4444',
 };
+
+const assetLabels: Record<string, string> = {
+  houseEquity: 'House equity',
+  tfsa: 'TFSA',
+  rrsp: 'RRSP',
+  nonRegistered: 'Non-registered',
+  helocDividend: 'HELOC dividend',
+  helocGrowth: 'HELOC growth',
+  helocDebt: 'HELOC debt',
+};
+
+const BREAKDOWN_KEYS = ['houseEquity', 'tfsa', 'rrsp', 'nonRegistered', 'helocDividend', 'helocGrowth', 'helocDebt'] as const;
+
+function NetWorthTooltip({
+  active,
+  payload,
+  label,
+  data,
+}: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; dataKey: string }>;
+  label?: string;
+  data?: Array<Record<string, unknown>>;
+}) {
+  if (!active || !label) return null;
+  const point = data?.find((d) => d.yearLabel === label) as Record<string, number> | undefined;
+  const total = point?.netWorth ?? payload?.[0]?.value ?? 0;
+  const isPositive = total >= 0;
+  const breakdown = point
+    ? BREAKDOWN_KEYS.filter((k) => typeof point[k] === 'number' && point[k] !== 0).map((k) => ({ key: k, value: point[k] as number }))
+    : payload
+        ?.filter((p) => p.dataKey !== 'netWorth' && typeof p.value === 'number')
+        .map((p) => ({ key: p.dataKey, value: p.value })) ?? [];
+
+  return (
+    <div className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2.5 shadow-xl min-w-[200px]">
+      <p className="text-xs font-medium text-slate-400 border-b border-slate-700 pb-1.5 mb-2">{label}</p>
+      <div className="space-y-1">
+        {breakdown.map(({ key, value }) => (
+          <div key={key} className="flex justify-between gap-4 text-xs">
+            <span className="text-slate-400" style={{ color: assetColors[key] ?? '#94a3b8' }}>
+              {assetLabels[key] ?? key}
+            </span>
+            <span className={key === 'helocDebt' ? 'text-rose-400' : 'text-slate-200'} tabular-nums>
+              {formatCurrency(value)}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between gap-4 mt-2 pt-2 border-t border-slate-700">
+        <span className="text-xs font-semibold text-slate-300">Net worth</span>
+        <span className={`text-sm font-bold tabular-nums ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {formatCurrency(total)}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 const cashflowColors = {
   salary: '#10b981',
@@ -102,25 +160,25 @@ export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChar
   });
 
   return (
-    <div className="rounded-2xl bg-slate-800/60 border border-slate-700/80 overflow-hidden shadow-xl">
-      <div className="px-4 py-3 border-b border-slate-700 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold text-slate-100">
-          {mode === 'cashflow' ? 'Cash flow over time' : 'Net worth over time'}
+    <div className="rounded-xl bg-slate-800/50 border border-slate-700/80 overflow-hidden shadow-lg">
+      <div className="px-3 py-2 border-b border-slate-700/80 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-base font-semibold text-slate-100">
+          {mode === 'cashflow' ? 'Cash flow' : 'Net worth'}
         </h2>
-        <div className="flex rounded-lg bg-slate-900/80 p-0.5 border border-slate-600">
+        <div className="flex rounded-md bg-slate-900/80 p-0.5 border border-slate-600">
           {TAB_OPTIONS.map(({ value, label }) => (
             <button
               key={value}
               type="button"
               onClick={() => setMode(value)}
-              className={`px-3 py-1.5 text-sm rounded-md transition ${mode === value ? 'bg-emerald-500/20 text-emerald-300' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-2.5 py-1 text-xs rounded transition ${mode === value ? 'bg-emerald-500/20 text-emerald-300' : 'text-slate-400 hover:text-slate-200'}`}
             >
               {label}
             </button>
           ))}
         </div>
       </div>
-      <div className="p-4 h-[360px]">
+      <div className="p-3 h-[320px]">
         <ResponsiveContainer width="100%" height="100%">
           {mode === 'cashflow' ? (
             <BarChart data={cashflowData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -209,17 +267,23 @@ export function BuyingNetWorthChart({ rows, retirementYear }: BuyingNetWorthChar
                 tickFormatter={formatCurrency}
               />
               <Tooltip
-                contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '8px' }}
-                labelStyle={{ color: '#e2e8f0' }}
-                labelFormatter={(label) => `${label}`}
-                formatter={(value: number, name: string) => [formatCurrency(value), name || 'Net worth']}
+                content={({ active, payload, label }) => (
+                  <NetWorthTooltip
+                    active={active}
+                    payload={payload as Array<{ name: string; value: number; dataKey: string }>}
+                    label={label as string}
+                    data={netWorthData}
+                  />
+                )}
+                contentStyle={{ backgroundColor: 'transparent', border: 'none', padding: 0 }}
               />
               {retirementXValue && (
                 <ReferenceLine
                   x={retirementXValue}
-                  stroke="#f59e0b"
-                  strokeDasharray="4 4"
-                  label={{ value: 'Retirement', fill: '#f59e0b', fontSize: 10 }}
+                  stroke="#f472b6"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  label={{ value: 'Retirement', fill: '#f472b6', fontSize: 11, fontWeight: 600 }}
                 />
               )}
               {mode === 'total' ? (

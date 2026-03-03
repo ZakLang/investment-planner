@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { getDownPaymentAllocation, type BuyingScenarioInputs, type RetirementAccountType } from '../types/buying';
 import type { BuyingYearRow } from '../lib/buyingProjection';
 import { CollapsibleSection } from './CollapsibleSection';
@@ -26,66 +26,79 @@ type FieldConfig = {
   key: keyof BuyingScenarioInputs;
   label: string;
   unit?: '$' | '%' | 'yr';
+  secondary?: boolean;
 };
 
-const PERSONAL_FIELDS: FieldConfig[] = [
+type CardGroup = { id: string; title: string; fields: FieldConfig[] };
+
+const PERSONAL_AND_INCOME: FieldConfig[] = [
   { key: 'currentAge', label: 'Current age', unit: 'yr' },
   { key: 'lifeExpectancy', label: 'Life expectancy', unit: 'yr' },
-  { key: 'retirementAge', label: 'Retirement age', unit: 'yr' },
+  { key: 'householdGrossIncome', label: 'Household gross income', unit: '$' },
+  { key: 'numberOfIncomeEarners', label: 'Income earners', unit: undefined },
+  { key: 'monthlyNonHousingExpenses', label: 'Monthly expenses', unit: '$' },
+  { key: 'yearlyRateOfIncrease', label: 'Income growth', unit: '%', secondary: true },
+  { key: 'expenseInflationRate', label: 'Expense inflation', unit: '%', secondary: true },
 ];
 
-const INCOME_EXPENSE_FIELDS: FieldConfig[] = [
-  { key: 'householdGrossIncome', label: 'Household gross income (annual)', unit: '$' },
-  { key: 'yearlyRateOfIncrease', label: 'Income growth (YoY)', unit: '%' },
-  { key: 'monthlyNonHousingExpenses', label: 'Monthly non-housing expenses', unit: '$' },
-  { key: 'expenseInflationRate', label: 'Expense inflation (YoY)', unit: '%' },
-];
+const PROPERTY_DETAILS: CardGroup = {
+  id: 'property',
+  title: 'Property details',
+  fields: [
+    { key: 'buyAmount', label: 'Purchase price', unit: '$' },
+    { key: 'percentageDownpayment', label: 'Down payment', unit: '%' },
+    { key: 'yearsUntilPurchase', label: 'Years until purchase (0 = now)', unit: 'yr' },
+    { key: 'monthlyRent', label: 'Monthly rent until purchase', unit: '$' },
+    { key: 'rentIncreasePercent', label: 'Rent increase (YoY)', unit: '%', secondary: true },
+    { key: 'startingYearlyTaxes', label: 'Property taxes (yearly)', unit: '$', secondary: true },
+    { key: 'startingMonthlyStrata', label: 'Strata (monthly)', unit: '$', secondary: true },
+    { key: 'currentFHSABalance', label: 'Current FHSA', unit: '$', secondary: true },
+    { key: 'currentTFSABalance', label: 'Current TFSA', unit: '$', secondary: true },
+    { key: 'currentRRSPBalance', label: 'Current RRSP', unit: '$', secondary: true },
+    { key: 'householdTFSAContributionRoom', label: 'TFSA room (household)', unit: '$', secondary: true },
+    { key: 'annualTFSARoomIncrease', label: 'TFSA room increase', unit: '$', secondary: true },
+    { key: 'currentRRSPRoom', label: 'RRSP room (household)', unit: '$', secondary: true },
+  ],
+};
 
-const PURCHASE_TIMING_FIELDS: FieldConfig[] = [
-  { key: 'yearsUntilPurchase', label: 'Years until purchase (0 = now)', unit: 'yr' },
-  { key: 'monthlyRent', label: 'Monthly rent until purchase', unit: '$' },
-  { key: 'rentIncreasePercent', label: 'Rent increase (YoY)', unit: '%' },
-];
+const LOAN_AND_MORTGAGE: CardGroup = {
+  id: 'loan',
+  title: 'Loan & mortgage',
+  fields: [
+    { key: 'mortgageRateInitial', label: 'Mortgage rate', unit: '%' },
+    { key: 'mortgageAmortizationYears', label: 'Amortization (years)', unit: 'yr' },
+    { key: 'mortgageRateAfterTerm', label: 'Rate after term', unit: '%', secondary: true },
+    { key: 'mortgageRateChangeAfterYears', label: 'Term length (years)', unit: 'yr', secondary: true },
+    { key: 'helocInterestRate', label: 'HELOC rate', unit: '%', secondary: true },
+    { key: 'helocGrowthFirst', label: 'Growth-first HELOC', unit: undefined, secondary: true },
+  ],
+};
 
-const PROPERTY_FIELDS: FieldConfig[] = [
-  { key: 'buyAmount', label: 'Purchase price', unit: '$' },
-  { key: 'percentageDownpayment', label: 'Down payment', unit: '%' },
-];
+const MARKET_ASSUMPTIONS: CardGroup = {
+  id: 'market',
+  title: 'Market assumptions',
+  fields: [
+    { key: 'investmentGrowthRate', label: 'Investment growth rate', unit: '%' },
+    { key: 'appreciationYoY', label: 'Property appreciation', unit: '%' },
+    { key: 'inflationTaxesYoY', label: 'Tax inflation', unit: '%', secondary: true },
+    { key: 'inflationStrataYoY', label: 'Strata inflation', unit: '%', secondary: true },
+    { key: 'dividendGrowthRatePercent', label: 'Dividend growth rate', unit: '%', secondary: true },
+    { key: 'dividendYieldPercent', label: 'Dividend yield', unit: '%', secondary: true },
+  ],
+};
 
-const RETIREMENT_FIELDS: FieldConfig[] = [
-  { key: 'monthlyMoneyNeededDuringRetirement', label: 'Monthly non-housing expenses (retirement)', unit: '$' },
-  { key: 'monthlyMoneyMadeDuringRetirement', label: 'Monthly part-time income (taxable)', unit: '$' },
-  { key: 'partTimeRetirementYears', label: 'Years of part-time work', unit: 'yr' },
-];
+const RETIREMENT_GOALS: CardGroup = {
+  id: 'retirement',
+  title: 'Retirement goals',
+  fields: [
+    { key: 'retirementAge', label: 'Retirement age', unit: 'yr' },
+    { key: 'monthlyMoneyNeededDuringRetirement', label: 'Monthly need (non-housing)', unit: '$' },
+    { key: 'monthlyMoneyMadeDuringRetirement', label: 'Part-time income', unit: '$', secondary: true },
+    { key: 'partTimeRetirementYears', label: 'Years of part-time work', unit: 'yr', secondary: true },
+  ],
+};
 
-const HOUSING_FIELDS: FieldConfig[] = [
-  { key: 'startingYearlyTaxes', label: 'Yearly property taxes', unit: '$' },
-  { key: 'startingMonthlyStrata', label: 'Monthly strata', unit: '$' },
-  { key: 'appreciationYoY', label: 'Property appreciation (YoY)', unit: '%' },
-  { key: 'inflationTaxesYoY', label: 'Tax inflation (YoY)', unit: '%' },
-  { key: 'inflationStrataYoY', label: 'Strata inflation (YoY)', unit: '%' },
-];
-
-const MORTGAGE_FIELDS: FieldConfig[] = [
-  { key: 'helocInterestRate', label: 'HELOC rate', unit: '%' },
-  { key: 'mortgageRateInitial', label: 'Initial mortgage rate', unit: '%' },
-  { key: 'mortgageRateAfterTerm', label: 'Rate after term', unit: '%' },
-  { key: 'mortgageRateChangeAfterYears', label: 'Term length (years)', unit: 'yr' },
-  { key: 'mortgageAmortizationYears', label: 'Amortization', unit: 'yr' },
-];
-
-const INVESTMENT_FIELDS: FieldConfig[] = [
-  { key: 'currentFHSABalance', label: 'Current FHSA', unit: '$' },
-  { key: 'currentTFSABalance', label: 'Current TFSA', unit: '$' },
-  { key: 'currentRRSPBalance', label: 'Current RRSP', unit: '$' },
-  { key: 'householdTFSAContributionRoom', label: 'TFSA room (household)', unit: '$' },
-  { key: 'annualTFSARoomIncrease', label: 'Annual TFSA room increase (household)', unit: '$' },
-  { key: 'currentRRSPRoom', label: 'RRSP room (household)', unit: '$' },
-  { key: 'investmentGrowthRate', label: 'Growth rate (TFSA, RRSP, growth stocks)', unit: '%' },
-  { key: 'dividendGrowthRatePercent', label: 'Dividend stock growth rate', unit: '%' },
-  { key: 'dividendYieldPercent', label: 'HELOC dividend yield', unit: '%' },
-  { key: 'numberOfIncomeEarners', label: 'Number of income earners', unit: undefined },
-];
+const CARD_GROUPS = [PROPERTY_DETAILS, LOAN_AND_MORTGAGE, MARKET_ASSUMPTIONS, RETIREMENT_GOALS];
 
 function getStep(key: keyof BuyingScenarioInputs): number {
   if (key.includes('Rate') || key.includes('Percent') || key.includes('YoY') || key === 'expenseInflationRate') return 0.1;
@@ -93,92 +106,116 @@ function getStep(key: keyof BuyingScenarioInputs): number {
   return 1;
 }
 
-function formatWithUnit(value: number, unit?: '$' | '%' | 'yr'): string {
-  if (value === 0 && unit !== '%') return '';
-  if (unit === '$') return value.toLocaleString('en-CA', { maximumFractionDigits: 0 }) + ' CAD';
-  if (unit === '%') return value + ' %';
-  if (unit === 'yr') return value + ' yr';
-  return String(value);
-}
+const INPUT_DEBOUNCE_MS = 150;
 
-function InputWithUnit({
+function DebouncedInput({
   value,
   unit,
   step,
   onChange,
   label,
+  secondary,
+  id,
+  fieldKey,
 }: {
   value: number;
   unit?: '$' | '%' | 'yr';
   step: number;
   onChange: (v: number) => void;
   label: string;
+  secondary?: boolean;
+  id: string;
+  fieldKey: keyof BuyingScenarioInputs;
 }) {
+  const [local, setLocal] = useState(value);
   const [focused, setFocused] = useState(false);
-  const [display, setDisplay] = useState(() => formatWithUnit(value, unit));
-  const inputRef = useRef<HTMLInputElement>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!focused) setDisplay(formatWithUnit(value, unit));
-  }, [value, unit, focused]);
+    if (!focused && local !== value) setLocal(value);
+  }, [value, focused]);
+
+  const flush = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (local !== value) onChange(local);
+  }, [local, value, onChange]);
+
+  useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
+
+  const handleChange = useCallback(
+    (v: number) => {
+      setLocal(v);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => onChange(v), INPUT_DEBOUNCE_MS);
+    },
+    [onChange],
+  );
+
+  const handleBlur = () => {
+    setFocused(false);
+    flush();
+  };
+
+  if (fieldKey === 'helocGrowthFirst' || label.includes('Growth-first')) {
+    return null;
+  }
 
   return (
-    <label className="block">
-      <span className="text-sm text-slate-400 line-clamp-2 min-h-[2rem] flex items-center">{label}</span>
-      <div className="mt-1">
-        {focused ? (
-          <input
-            ref={inputRef}
-            type="number"
-            min={0}
-            step={step}
-            autoFocus
-            value={value === 0 && unit !== '%' ? '' : value}
-            onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
-            onBlur={() => setFocused(false)}
-            className="w-full rounded-lg bg-slate-900/80 border border-slate-600 text-slate-100 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
-          />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setFocused(true)}
-            className="w-full text-left rounded-lg bg-slate-900/80 border border-slate-600 text-slate-100 px-3 py-2 text-sm hover:border-slate-500 transition tabular-nums"
-          >
-            {display || (unit === '%' ? '0 %' : '0')}
-          </button>
-        )}
-      </div>
+    <label
+      htmlFor={id}
+      className={`block ${secondary ? 'opacity-75' : ''}`}
+    >
+      <span className={`block truncate mb-1 ${secondary ? 'text-slate-500 text-xs' : 'text-slate-400 text-xs'}`}>
+        {label}
+      </span>
+      <input
+        id={id}
+        type="number"
+        min={0}
+        step={step}
+        value={local === 0 && unit !== '%' ? '' : local}
+        onChange={(e) => handleChange(e.target.value === '' ? 0 : Number(e.target.value))}
+        onFocus={() => setFocused(true)}
+        onBlur={handleBlur}
+        className="w-full rounded-md bg-slate-800 border border-slate-600 text-slate-100 px-2.5 py-2 text-sm tabular-nums focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 outline-none transition min-h-[44px]"
+        aria-label={label}
+      />
     </label>
   );
 }
 
-function FieldGrid({ fields, values, onChange }: { fields: FieldConfig[]; values: BuyingScenarioInputs; onChange: (k: keyof BuyingScenarioInputs, v: number) => void }) {
+function FieldGrid({
+  fields,
+  values,
+  onChange,
+}: {
+  fields: FieldConfig[];
+  values: BuyingScenarioInputs;
+  onChange: (k: keyof BuyingScenarioInputs, v: number) => void;
+}) {
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-      {fields.map(({ key, label, unit }) => (
-        <InputWithUnit
-          key={key}
-          label={label}
-          value={values[key] as number}
-          unit={unit}
-          step={getStep(key)}
-          onChange={(v) => onChange(key, v)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function BudgetBreakdownBar({ label, amount, total, color }: { label: string; amount: number; total: number; color: string }) {
-  const pct = total > 0 ? (amount / total) * 100 : 0;
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-[90px] text-slate-400 truncate">{label}</span>
-      <div className="flex-1 h-3 bg-slate-900 rounded-full overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
-      </div>
-      <span className="w-[70px] text-right text-slate-300 tabular-nums">{fmtCurrency(amount)}</span>
-      <span className="w-[32px] text-right text-slate-500 tabular-nums">{pct.toFixed(0)}%</span>
+    <div className="grid grid-cols-2 gap-x-2 gap-y-3">
+      {fields.map(({ key, label, unit, secondary }) => {
+        if (key === 'helocGrowthFirst') {
+          return null;
+        }
+        return (
+          <DebouncedInput
+            key={key}
+            id={`input-${key}`}
+            fieldKey={key}
+            label={label}
+            value={values[key] as number}
+            unit={unit}
+            step={getStep(key)}
+            onChange={(v) => onChange(key, v)}
+            secondary={secondary}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -199,139 +236,86 @@ export function BuyingInputPanel({ values, onChange, onWithdrawalOrderChange, re
   };
 
   return (
-    <div className="rounded-2xl bg-slate-800/60 border border-slate-700/80 p-4 shadow-xl space-y-2 max-h-[85vh] overflow-y-auto">
-      <h2 className="font-display text-lg font-semibold text-slate-100 sticky top-0 bg-slate-800/95 py-2 z-10">
-        Scenario inputs
-      </h2>
-
-      {/* Personal */}
-      <div className="space-y-3">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Personal</p>
-        <FieldGrid fields={PERSONAL_FIELDS} values={values} onChange={onChange} />
-      </div>
-
-      {/* Income & Expenses */}
-      <div className="space-y-3 pt-2">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Income & Expenses</p>
-        <FieldGrid fields={INCOME_EXPENSE_FIELDS} values={values} onChange={onChange} />
-        {firstYearRow && firstYearRow.grossIncome > 0 && (() => {
-          const gross = firstYearRow.grossIncome;
-          const taxes = firstYearRow.incomeTax;
-          const housing = firstYearRow.yearlyHousingCosts;
-          const expenses = firstYearRow.nonHousingExpenses;
-          const helocInt = Math.max(0, firstYearRow.yearlyHelocInterest - firstYearRow.yearlyDividendIncome);
-          const savings = firstYearRow.tfsaContributions + firstYearRow.rrspContributions + firstYearRow.nonRegisteredContributions;
-          return (
-            <div className="rounded-lg bg-slate-900/80 border border-slate-600 px-3 py-2.5 text-sm space-y-1.5">
-              <p className="text-slate-400 font-medium">Year 1 monthly budget breakdown</p>
-              <div className="space-y-1">
-                <BudgetBreakdownBar label="Taxes" amount={Math.round(taxes / 12)} total={Math.round(gross / 12)} color="#ef4444" />
-                <BudgetBreakdownBar label="Housing" amount={Math.round(housing / 12)} total={Math.round(gross / 12)} color="#0ea5e9" />
-                <BudgetBreakdownBar label="Expenses" amount={Math.round(expenses / 12)} total={Math.round(gross / 12)} color="#f59e0b" />
-                {helocInt > 0 && (
-                  <BudgetBreakdownBar label="HELOC int." amount={Math.round(helocInt / 12)} total={Math.round(gross / 12)} color="#f472b6" />
-                )}
-                <BudgetBreakdownBar label="Savings" amount={Math.round(savings / 12)} total={Math.round(gross / 12)} color="#a855f7" />
-              </div>
-              <div className="flex items-center justify-between pt-1 border-t border-slate-700">
-                <span className="text-slate-400 text-xs">Gross income</span>
-                <span className="text-slate-200 text-xs font-semibold tabular-nums">{fmtCurrency(Math.round(gross / 12))}/mo</span>
-              </div>
+    <div className="p-2 space-y-2 flex-1">
+      <div className="rounded-lg bg-slate-800/50 border border-slate-700/80 p-3 space-y-3">
+        <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Personal & income</p>
+        <FieldGrid fields={PERSONAL_AND_INCOME} values={values} onChange={onChange} />
+        {firstYearRow && firstYearRow.grossIncome > 0 && (
+          <div className="rounded-md bg-slate-900/80 border border-slate-700 px-2.5 py-2 text-[11px] space-y-1 mt-2">
+            <p className="text-slate-500 font-medium">Year 1 budget (monthly)</p>
+            <div className="flex justify-between text-slate-400">
+              <span>Taxes</span>
+              <span className="text-rose-400/90 tabular-nums">{fmtCurrency(Math.round(firstYearRow.incomeTax / 12))}</span>
             </div>
-          );
-        })()}
-      </div>
-
-      {/* Purchase timing (when & rent until then) */}
-      <div className="space-y-3 pt-2">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Purchase timing</p>
-        <FieldGrid fields={PURCHASE_TIMING_FIELDS} values={values} onChange={onChange} />
-        {values.yearsUntilPurchase > 0 && (
-          <p className="text-xs text-slate-500">
-            Rent increases each year by {values.rentIncreasePercent}% (Vancouver-style). After {values.yearsUntilPurchase} years you buy with accumulated savings.
-          </p>
+            <div className="flex justify-between text-slate-400">
+              <span>Housing</span>
+              <span className="tabular-nums">{fmtCurrency(Math.round(firstYearRow.yearlyHousingCosts / 12))}</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>Savings</span>
+              <span className="text-emerald-400/90 tabular-nums">
+                {fmtCurrency(Math.round((firstYearRow.tfsaContributions + firstYearRow.rrspContributions + firstYearRow.nonRegisteredContributions) / 12))}
+              </span>
+            </div>
+          </div>
         )}
       </div>
 
-      {/* Property */}
-      <div className="space-y-3 pt-2">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Property</p>
-        <FieldGrid fields={PROPERTY_FIELDS} values={values} onChange={onChange} />
-        <div className="rounded-lg bg-slate-900/80 border border-slate-600 px-3 py-2 text-sm">
-          <p className="text-slate-400 font-medium">Down payment allocation</p>
-          <p className="text-slate-300 mt-0.5">
-            {fmtCurrency(allocation.downPayment)} → FHSA {fmtCurrency(allocation.amountFromFHSA)}, RRSP {fmtCurrency(allocation.amountFromRRSP)}, TFSA {fmtCurrency(allocation.amountFromTFSA)}
-          </p>
-        </div>
-      </div>
-
-      {/* Retirement */}
-      <div className="space-y-3 pt-2">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Retirement</p>
-        <FieldGrid fields={RETIREMENT_FIELDS} values={values} onChange={onChange} />
-        <div className="rounded-lg bg-slate-900/80 border border-slate-600 px-3 py-2 text-sm space-y-1">
-          <p className="text-slate-400 font-medium">Estimated total monthly need at retirement</p>
-          {retirementMonthlyHousing != null ? (
-            <>
-              <p className="text-slate-500 text-xs">
-                Non-housing: {fmtCurrency(values.monthlyMoneyNeededDuringRetirement)} + Housing (mortgage, strata, taxes): {fmtCurrency(retirementMonthlyHousing)}
+      {CARD_GROUPS.map((group) => (
+        <CollapsibleSection key={group.id} title={group.title} defaultOpen={group.id === 'property'}>
+          <FieldGrid fields={group.fields} values={values} onChange={onChange} />
+          {group.id === 'property' && (
+            <div className="mt-3 pt-3 border-t border-slate-700/80 text-xs">
+              <p className="text-slate-500">Down payment</p>
+              <p className="text-slate-300 mt-0.5">
+                {fmtCurrency(allocation.downPayment)} → FHSA {fmtCurrency(allocation.amountFromFHSA)}, RRSP {fmtCurrency(allocation.amountFromRRSP)}, TFSA {fmtCurrency(allocation.amountFromTFSA)}
               </p>
-              <p className="text-slate-200 font-semibold">
-                {fmtCurrency(values.monthlyMoneyNeededDuringRetirement + retirementMonthlyHousing)}/mo
-              </p>
-            </>
-          ) : (
-            <p className="text-slate-500 text-xs">Housing costs are added automatically from the projection.</p>
-          )}
-          <p className="text-slate-500 text-xs mt-1">
-            Part-time income ({fmtCurrency(values.monthlyMoneyMadeDuringRetirement)}/mo for {values.partTimeRetirementYears} yr) is taxed via brackets, then offsets investment withdrawals.
-          </p>
-        </div>
-      </div>
-
-      <CollapsibleSection title="Retirement withdrawal order" defaultOpen={true}>
-        <p className="text-xs text-slate-500 mb-2">Order to drain accounts in retirement. HELOC = growth bucket only (sell and repay); dividend bucket is never sold.</p>
-        <div className="flex flex-wrap items-center gap-2">
-          {order.map((_, idx) => (
-            <div key={idx} className="flex items-center gap-1">
-              <span className="text-slate-500 text-sm">{idx === 0 ? '1st' : idx === 1 ? '2nd' : idx === 2 ? '3rd' : '4th'}</span>
-              <select
-                value={order[idx]}
-                onChange={(e) => handleOrderChange(idx, e.target.value as RetirementAccountType)}
-                className="rounded-lg bg-slate-900/80 border border-slate-600 text-slate-100 px-2 py-1.5 text-sm focus:border-emerald-500 outline-none"
-              >
-                {RETIREMENT_ACCOUNT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
             </div>
-          ))}
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection title="Housing costs & inflation" defaultOpen={false}>
-        <FieldGrid fields={HOUSING_FIELDS} values={values} onChange={onChange} />
-      </CollapsibleSection>
-
-      <CollapsibleSection title="Mortgage & HELOC" defaultOpen={false}>
-        <FieldGrid fields={MORTGAGE_FIELDS} values={values} onChange={onChange} />
-        <label className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-700 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={values.helocGrowthFirst}
-            onChange={(e) => onChange('helocGrowthFirst', e.target.checked)}
-            className="rounded border-slate-500 text-emerald-500 focus:ring-emerald-500"
-          />
-          <div>
-            <span className="text-sm text-slate-200">Growth-first HELOC strategy</span>
-            <p className="text-xs text-slate-500">Prioritize growth stocks early, auto-switch to dividends before retirement</p>
-          </div>
-        </label>
-      </CollapsibleSection>
-
-      <CollapsibleSection title="Investments (TFSA, RRSP, etc.)" defaultOpen={false}>
-        <FieldGrid fields={INVESTMENT_FIELDS} values={values} onChange={onChange} />
-      </CollapsibleSection>
+          )}
+          {group.id === 'loan' && (
+            <label className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-700/80 cursor-pointer min-h-[44px]">
+              <input
+                type="checkbox"
+                checked={values.helocGrowthFirst}
+                onChange={(e) => onChange('helocGrowthFirst', e.target.checked)}
+                className="rounded border-slate-500 text-emerald-500 focus:ring-emerald-500/50 w-4 h-4"
+                aria-label="Growth-first HELOC strategy"
+              />
+              <div>
+                <span className="text-xs text-slate-300">Growth-first HELOC</span>
+                <p className="text-[11px] text-slate-500">Growth early, then dividends before retirement</p>
+              </div>
+            </label>
+          )}
+          {group.id === 'retirement' && (
+            <div className="mt-3 pt-3 border-t border-slate-700/80 space-y-2">
+              <p className="text-[11px] text-slate-500">Withdrawal order in retirement</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {order.map((_, idx) => (
+                  <div key={idx} className="flex items-center gap-1">
+                    <span className="text-slate-500 text-xs">{idx === 0 ? '1st' : idx === 1 ? '2nd' : idx === 2 ? '3rd' : '4th'}</span>
+                    <select
+                      value={order[idx]}
+                      onChange={(e) => handleOrderChange(idx, e.target.value as RetirementAccountType)}
+                      className="rounded-md bg-slate-800 border border-slate-600 text-slate-100 px-2 py-1.5 text-xs focus:border-emerald-500 outline-none min-h-[36px]"
+                      aria-label={`Withdrawal priority ${idx + 1}`}
+                    >
+                      {RETIREMENT_ACCOUNT_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {retirementMonthlyHousing != null && (
+                <p className="text-[11px] text-slate-500 pt-1">
+                  Monthly need (incl. housing): {fmtCurrency(values.monthlyMoneyNeededDuringRetirement + retirementMonthlyHousing)}/mo
+                </p>
+              )}
+            </div>
+          )}
+        </CollapsibleSection>
+      ))}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { runBuyingProjection } from './lib/buyingProjection';
 import { getSuggestions } from './lib/suggestions';
 import { DEFAULT_BUYING_INPUTS, type BuyingScenarioInputs, type RetirementAccountType } from './types/buying';
+import { SummaryBanner } from './components/SummaryBanner';
 import { BuyingInputPanel } from './components/BuyingInputPanel';
 import { BuyingForecastTable } from './components/BuyingForecastTable';
 import { BuyingNetWorthChart } from './components/BuyingNetWorthChart';
@@ -65,11 +66,16 @@ function App() {
   }, [inputs]);
 
   const rows = useMemo(() => runBuyingProjection(inputs), [inputs]);
+  const buyNowRows = useMemo(() => {
+    if (inputs.yearsUntilPurchase <= 0) return null;
+    return runBuyingProjection({ ...inputs, yearsUntilPurchase: 0 });
+  }, [inputs]);
   const suggestions = useMemo(() => getSuggestions(inputs, rows), [inputs, rows]);
   const retirementYear = new Date().getFullYear() + Math.max(0, inputs.retirementAge - inputs.currentAge);
   const retirementRow = rows.find((r) => r.year === retirementYear);
   const retirementMonthlyHousing = retirementRow?.monthlyHousingCosts;
   const firstRow = rows[0];
+  const comparisonYear = retirementYear ?? (rows.length > 0 ? rows[rows.length - 1].year : new Date().getFullYear());
 
   const handleChange = (field: keyof BuyingScenarioInputs, value: number | boolean) => {
     if (field === 'numberOfIncomeEarners') {
@@ -93,75 +99,91 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="max-w-[1600px] mx-auto px-4 py-6 sm:py-10">
-        <header className="mb-6 flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
-              Net Worth Planner
-            </h1>
-            <p className="mt-1 text-slate-400 text-sm sm:text-base">
-              See how your net worth builds over time. Adjust inputs and use suggestions to optimize. Your data is saved in this browser.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleResetToDefaults}
-            className="text-sm text-slate-500 hover:text-slate-300 underline"
-          >
-            Reset to defaults
-          </button>
-        </header>
-
-        {/* Hero: Net worth over time */}
-        <section className="mb-6">
-          <BuyingNetWorthChart rows={rows} retirementYear={retirementYear} />
-        </section>
-
-        {/* Summary stats */}
-        <section className="mb-6">
-          <SummaryStats rows={rows} retirementYear={retirementYear} />
-        </section>
-
-        {/* Inputs + Suggestions */}
-        <section className="grid gap-6 lg:grid-cols-[360px_1fr] mb-8">
-          <aside className="min-w-0">
-            <BuyingInputPanel
-              values={inputs}
-              onChange={handleChange}
-              onWithdrawalOrderChange={handleWithdrawalOrderChange}
-              retirementMonthlyHousing={retirementMonthlyHousing}
-              firstYearRow={firstRow}
-            />
-          </aside>
-          <div className="min-w-0">
-            <SuggestionsPanel suggestions={suggestions} />
-          </div>
-        </section>
-
-        {/* Detailed table (collapsible) */}
-        <section>
-          <div className="rounded-2xl bg-slate-800/60 border border-slate-700/80 overflow-hidden shadow-xl">
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      <div className="flex flex-1 min-h-0 w-full max-w-[1800px] mx-auto">
+        {/* Sidebar: inputs in collapsible cards */}
+        <aside className="w-[320px] shrink-0 border-r border-slate-800 bg-slate-900/30 overflow-y-auto flex flex-col">
+          <div className="p-3 border-b border-slate-800 flex items-center justify-between">
+            <h2 className="font-display text-sm font-semibold text-slate-200">Assumptions</h2>
             <button
               type="button"
-              onClick={() => setTableOpen((o) => !o)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left border-b border-slate-700 hover:bg-slate-700/30 transition"
+              onClick={handleResetToDefaults}
+              className="text-xs text-slate-500 hover:text-slate-300 underline"
             >
-              <span className="font-display text-lg font-semibold text-slate-100">
-                Year-by-year forecast
-              </span>
-              <span
-                className="text-slate-500 transition-transform inline-block"
-                style={{ transform: tableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                aria-hidden
-              >
-                ▼
-              </span>
+              Reset
             </button>
-            {tableOpen && <BuyingForecastTable rows={rows} />}
           </div>
-        </section>
+          <BuyingInputPanel
+            values={inputs}
+            onChange={handleChange}
+            onWithdrawalOrderChange={handleWithdrawalOrderChange}
+            retirementMonthlyHousing={retirementMonthlyHousing}
+            firstYearRow={firstRow}
+          />
+        </aside>
+
+        {/* Main: results always visible */}
+        <main className="flex-1 min-w-0 flex flex-col overflow-auto">
+          <div className="p-4 sm:p-6 space-y-4">
+            <header>
+              <h1 className="font-display text-xl sm:text-2xl font-bold text-white tracking-tight">
+                Your net worth, mapped
+              </h1>
+              <p className="mt-0.5 text-slate-400 text-sm">
+                See how housing, investments, and tax choices play out. Your data is saved in this browser.
+              </p>
+            </header>
+
+            <SummaryBanner
+              rows={rows}
+              buyNowRows={buyNowRows}
+              comparisonYear={comparisonYear}
+              retirementYear={retirementYear}
+            />
+
+            <section className="flex-shrink-0">
+              <BuyingNetWorthChart rows={rows} retirementYear={retirementYear} />
+            </section>
+
+            <section>
+              <SummaryStats rows={rows} retirementYear={retirementYear} />
+            </section>
+
+            <section className="grid gap-4 lg:grid-cols-1">
+              <SuggestionsPanel suggestions={suggestions} />
+            </section>
+
+            <section>
+              <div className="rounded-xl bg-slate-800/60 border border-slate-700/80 overflow-hidden shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => setTableOpen((o) => !o)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 text-left border-b border-slate-700 hover:bg-slate-700/30 transition min-h-[44px]"
+                  aria-expanded={tableOpen}
+                >
+                  <span className="font-display text-base font-semibold text-slate-100">
+                    Year-by-year forecast
+                  </span>
+                  <span
+                    className="text-slate-500 transition-transform inline-block text-xs"
+                    style={{ transform: tableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                    aria-hidden
+                  >
+                    ▼
+                  </span>
+                </button>
+                {tableOpen && <BuyingForecastTable rows={rows} />}
+              </div>
+            </section>
+          </div>
+        </main>
       </div>
+
+      <footer className="border-t border-slate-800 py-2 px-3 sm:px-4 shrink-0">
+        <p className="text-center text-xs text-slate-600">
+          Built by <span className="text-slate-500">Zak</span>
+        </p>
+      </footer>
     </div>
   );
 }

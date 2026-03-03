@@ -24,24 +24,28 @@ export function SummaryStats({ rows, retirementYear }: SummaryStatsProps) {
     : 0;
 
   const stats = [
-    { label: 'Net worth today', value: fmtCurrency(first.netWorth), sub: `Age ${first.age}` },
-    ...(atRetirement ? [{ label: 'Net worth at retirement', value: fmtCurrency(atRetirement.netWorth), sub: `Age ${atRetirement.age}` }] : []),
-    { label: `Net worth at age ${last.age}`, value: fmtCurrency(last.netWorth), sub: `Year ${last.year}` },
-    ...(workingRows.length > 0 ? [{ label: 'Avg effective tax rate', value: `${(avgTaxRate * 100).toFixed(1)}%`, sub: 'Federal + BC' }] : []),
+    { label: 'Net worth today', value: fmtCurrency(first.netWorth), sub: `Age ${first.age}`, positive: first.netWorth >= 0 },
+    ...(atRetirement ? [{ label: 'Net worth at retirement', value: fmtCurrency(atRetirement.netWorth), sub: `Age ${atRetirement.age}`, positive: atRetirement.netWorth >= 0 }] : []),
+    { label: `Net worth at age ${last.age}`, value: fmtCurrency(last.netWorth), sub: `Year ${last.year}`, positive: last.netWorth >= 0 },
+    ...(workingRows.length > 0 ? [{ label: 'Avg effective tax rate', value: `${(avgTaxRate * 100).toFixed(1)}%`, sub: 'Federal + BC', positive: undefined }] : []),
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      {stats.map(({ label, value, sub }) => (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {stats.map(({ label, value, sub, positive }) => (
         <div
           key={label}
-          className="rounded-xl bg-slate-800/80 border border-slate-700/80 px-4 py-3"
+          className="rounded-lg bg-slate-800/60 border border-slate-700/80 px-3 py-2"
         >
-          <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{label}</p>
-          <p className="mt-1 text-xl font-display font-semibold text-white tabular-nums">
+          <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">{label}</p>
+          <p
+            className={`mt-0.5 text-lg font-display font-semibold tabular-nums ${
+              positive === true ? 'text-emerald-400' : positive === false ? 'text-rose-400' : 'text-white'
+            }`}
+          >
             {value}
           </p>
-          <p className="text-xs text-slate-500 mt-0.5">{sub}</p>
+          <p className="text-[11px] text-slate-500">{sub}</p>
         </div>
       ))}
     </div>
