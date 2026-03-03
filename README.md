@@ -25,6 +25,14 @@ npm run build
 npm run preview   # optional: preview production build
 ```
 
+## Deploy to Cloudflare Pages
+
+1. Connect the repo in **Workers & Pages > Create > Pages > Connect to Git**.
+2. Use **Framework preset: None** (do not use the Vite preset).
+3. **Build command:** `npm run build`
+4. **Build output directory:** `dist`
+5. The project uses `.nvmrc` (Node 20); Cloudflare will use it if available. Otherwise set **NODE_VERSION** = `20` in the build environment variables.
+
 ## Tech stack
 
 - React 18 + TypeScript
