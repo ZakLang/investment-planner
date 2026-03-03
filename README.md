@@ -25,26 +25,15 @@ npm run build
 npm run preview   # optional: preview production build
 ```
 
-## Deploy to Cloudflare Pages (recommended: GitHub Actions + Direct Upload)
+## Deploy to Cloudflare Pages
 
-Cloudflare’s “Connect to Git” build injects `@cloudflare/vite-plugin`, which breaks with Vite 5. This repo uses **Direct Upload**: the app is built in GitHub Actions and only the built `dist` folder is uploaded to Pages.
+1. **Workers & Pages > Create > Pages > Connect to Git** and select this repo.
+2. Set **Framework preset** to **None** (do not use the Vite preset, or the build will fail).
+3. **Build command:** `npm run build`
+4. **Build output directory:** `dist`
+5. Optional: set **NODE_VERSION** = `20` in the build environment variables, or rely on the repo’s `.nvmrc`.
 
-### One-time setup
-
-1. **Create a Pages project for Direct Upload**
-   - In Cloudflare: **Workers & Pages > Create > Pages > Direct Upload**.
-   - Project name: `investment-planner` (or change `--project-name` in `.github/workflows/deploy-pages.yml`).
-
-2. **Create a Cloudflare API token**
-   - [API Tokens](https://dash.cloudflare.com/profile/api-tokens) → Create Token → use “Edit Cloudflare Workers” template or custom with **Account > Cloudflare Pages > Edit**.
-   - Copy the token.
-
-3. **Add GitHub secrets**
-   - Repo **Settings > Secrets and variables > Actions** → New repository secret:
-   - `CLOUDFLARE_API_TOKEN`: the token from step 2.
-   - `CLOUDFLARE_ACCOUNT_ID`: your Account ID (Cloudflare dashboard, right-hand side).
-
-After that, every push to `main` runs the workflow: build in GitHub Actions, then deploy `dist` to Cloudflare Pages. No build runs on Cloudflare’s side.
+Each push to `main` triggers a build and deploy on Cloudflare.
 
 ## Tech stack
 
